@@ -25,6 +25,7 @@ const crypto = require("crypto");
 // GitHub 사용자명과 Slack 사용자 ID 매핑
 const githubToSlackMap = {
   JH8459: "<@U04V9CHPE2F>",
+  aksel26: "<@U04UV0MHDFZ>",
 };
 
 const SLACK_WEBHOOK_URL =
@@ -62,6 +63,8 @@ exports.githubWebhook = functions.https.onRequest((req, res) => {
       .map((reviewer) => githubToSlackMap[reviewer.login || reviewer.login])
       .join(", ");
 
+    const mentionUser = githubToSlackMap[pr.user.login];
+
     const message = {
       text: `${TARGET_BRANCH} 브랜치에 새로운 Pull Request가 생성되었습니다!`,
       attachments: [
@@ -70,7 +73,7 @@ exports.githubWebhook = functions.https.onRequest((req, res) => {
           title: pr.title,
           title_link: pr.html_url,
           text: pr.body,
-          author_name: pr.user.login,
+          author_name: mentionUser,
           author_icon: pr.user.avatar_url,
           footer: "ACG",
           fields: [
