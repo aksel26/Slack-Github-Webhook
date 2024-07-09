@@ -26,6 +26,7 @@ const crypto = require("crypto");
 const githubToSlackMap = {
   JH8459: "<@U04V9CHPE2F>",
   aksel26: "<@U04UV0MHDFZ>",
+  thsuekfk2: "<@U050K7691L0>",
 };
 
 const SLACK_WEBHOOK_URL =
@@ -56,31 +57,54 @@ exports.githubWebhook = functions.https.onRequest((req, res) => {
     pr &&
     payload.action === "closed" &&
     pr.requested_reviewers.length >= 0 &&
-    pr.base.ref === "prod"
+    pr.base.ref === TARGET_BRANCH
   ) {
-    const pr = payload.pull_request;
-    const reviewers = pr.requested_reviewers
-      .map((reviewer) => githubToSlackMap[reviewer.login || reviewer.login])
-      .join(", ");
+    const {
+      html_url: prUrl,
+      body: prBody,
+      user: prUser,
+      title: prTitle,
+    } = payload.pull_request;
+    const repoName = payload.pull_request.head.repo.name;
+
+    function transformTextWithLink(text) {
+      const linkPattern =
+        /\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\((https?:\/\/[^\)]+)\)/g;
+      return text.replace(linkPattern, "<$2|$1>");
+    }
 
     const mentionUser = githubToSlackMap[pr.user.login];
 
     const message = {
-      text: `${TARGET_BRANCH} 브랜치에 새로운 Pull Request가 생성되었습니다!`,
       attachments: [
         {
-          mrkdwn_in: ["text", "fields"],
-          title: pr.title,
-          title_link: pr.html_url,
-          text: pr.body,
-          author_name: mentionUser,
-          author_icon: pr.user.avatar_url,
+          mrkdwn_in: ["text", "fields", "author_name"],
+          color: "#36a64f",
+          title: prTitle,
+          title_link: prUrl,
+          author_name: prUser.login,
+          author_icon: prUser.avatar_url,
           footer: "ACG",
           fields: [
             {
-              title: "Reviewers",
-              value: reviewers || "Reviewer가 없습니다.",
+              title: "반영내용",
+              value: transformTextWithLink(prBody) || "특이사항 없음",
+              short: false,
+            },
+            {
+              title: "반영서버",
+              value: repoName,
               short: true,
+            },
+            {
+              title: "기한",
+              value: "영업일 기준 다음날 새벽 4시 45분",
+              short: true,
+            },
+            {
+              title: "요청자",
+              value: mentionUser,
+              short: false,
             },
           ],
         },
