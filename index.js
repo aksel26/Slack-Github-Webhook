@@ -28,9 +28,9 @@ const githubToSlackMap = {
   aksel26: "<@U04UV0MHDFZ>",
   thsuekfk2: "<@U050K7691L0>",
 };
-
+const SLACK_BOT_TOKEN = functions.config().slack.bot_token;
 const SLACK_WEBHOOK_URL =
-  "https://hooks.slack.com/services/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";
+  "https://hooks.slack.com/services/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";
 const GITHUB_SECRET = "acghr2467!";
 const TARGET_BRANCH = "prod";
 
@@ -44,7 +44,7 @@ function verifySignature(req) {
   return githubSignature === signature;
 }
 
-exports.githubWebhook = functions.https.onRequest((req, res) => {
+exports.githubWebhook = functions.https.onRequest(async (req, res) => {
   if (!verifySignature(req)) {
     console.error("Signature mismatch");
     return res.status(401).send("Unauthorized");
@@ -107,18 +107,76 @@ exports.githubWebhook = functions.https.onRequest((req, res) => {
               short: false,
             },
           ],
+          fallback: "배포 상태변경을 실패했습니다.",
+          callback_id: `deploy_status_${pr.id}`,
+          actions: [
+            {
+              name: "deploy_status",
+              text: "예정",
+              type: "button",
+              value: "scheduled",
+            },
+          ],
         },
       ],
     };
-    axios
-      .post(SLACK_WEBHOOK_URL, message)
-      .then(() => {
-        console.log("Slack notification sent successfully");
-        res.status(200).send("OK");
-      })
-      .catch((error) => {
-        console.error("Error sending Slack notification:", error);
-        res.status(500).send("Error");
-      });
+    try {
+      const response = await axios.post(SLACK_WEBHOOK_URL, message);
+      console.log("Slack webhook response:", response.data);
+    } catch (error) {
+      console.error(
+        "Error posting to Slack webhook:",
+        error.response ? error.response.data : error.message
+      );
+    }
   }
+  res.status(200).send("OK");
+});
+
+// Slack interactive message handler
+exports.slackAction = functions.https.onRequest(async (req, res) => {
+  console.log(
+    "🚀 ~ exports.slackAction=functions.https.onRequest ~ req:",
+    req.body
+  );
+  const payload = JSON.parse(req.body.payload);
+  const action = payload.actions[0];
+  const originalMessage = payload.original_message;
+  const deployStatus = action.value === "scheduled" ? "완료" : "예정";
+
+  const updatedAttachments = originalMessage.attachments.map((attachment) => ({
+    ...attachment,
+    actions: attachment.actions.map((act) => ({
+      ...act,
+      text: deployStatus,
+      value: deployStatus === "예정" ? "scheduled" : "completed",
+    })),
+  }));
+
+  const updatePayload = {
+    channel: payload.channel.id,
+    ts: payload.message_ts,
+    attachments: updatedAttachments,
+  };
+
+  try {
+    const response = await axios.post(
+      "https://slack.com/api/chat.update",
+      updatePayload,
+      {
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        },
+      }
+    );
+    console.log("Slack chat.update response:", response.data);
+  } catch (error) {
+    console.error(
+      "Error updating Slack message:",
+      error.response ? error.response.data : error.message
+    );
+  }
+
+  res.status(200).send();
 });
