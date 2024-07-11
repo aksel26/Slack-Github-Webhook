@@ -1,24 +1,19 @@
 const functions = require("firebase-functions");
-const crypto = require("crypto");
-const { WebClient } = require("@slack/web-api");
-const { App, ExpressReceiver } = require("@slack/bolt");
 
-const SLACK_BOT_TOKEN = functions.config().slack.bot_token;
-const SLACK_SIGNING_SECRET = functions.config().slack.signing_secret;
-const GITHUB_SECRET = "acghr2467!";
+const axios = require("axios");
+const dotenv = require("dotenv");
+const crypto = require("crypto");
+
+dotenv.config();
+
+// GitHub
+const GITHUB_SECRET = process.env.GITHUB_SECRET;
 const TARGET_BRANCH = "prod";
 
-// ExpressReceiver 초기화
-const receiver = new ExpressReceiver({
-  signingSecret: SLACK_SIGNING_SECRET,
-});
-
-const app = new App({
-  token: SLACK_BOT_TOKEN,
-  receiver,
-});
-
-const web = new WebClient(SLACK_BOT_TOKEN);
+//Slack
+const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
+const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
 const githubToSlackMap = {
   JH8459: "<@U04V9CHPE2F>",
@@ -26,6 +21,20 @@ const githubToSlackMap = {
   thsuekfk2: "<@U050K7691L0>",
 };
 
+function verifySlackSignature(req) {
+  const slackSignature = req.headers["x-slack-signature"];
+  const requestBody = req.rawBody.toString();
+  const timestamp = req.headers["x-slack-request-timestamp"];
+  const sigBaseString = `v0:${timestamp}:${requestBody}`;
+  const mySignature = `v0=${crypto
+    .createHmac("sha256", SLACK_SIGNING_SECRET)
+    .update(sigBaseString)
+    .digest("hex")}`;
+  return crypto.timingSafeEqual(
+    Buffer.from(mySignature, "utf8"),
+    Buffer.from(slackSignature, "utf8")
+  );
+}
 // GitHub Webhook signature 검증 함수
 function verifySignature(req) {
   const signature = `sha256=${crypto
@@ -36,7 +45,7 @@ function verifySignature(req) {
   return githubSignature === signature;
 }
 
-// GitHub Webhook 함수
+// GitHub Webhook 핸들러
 exports.githubWebhook = functions.https.onRequest(async (req, res) => {
   if (!verifySignature(req)) {
     console.error("Signature mismatch");
@@ -144,62 +153,90 @@ exports.githubWebhook = functions.https.onRequest(async (req, res) => {
         },
       ],
     };
-
-    try {
-      const result = await web.chat.postMessage(message);
-      console.log("Message sent:", result.ts);
-      res.status(200).send("Slack message sent successfully");
-    } catch (error) {
-      console.error("Error sending message to Slack:", error);
-      res.status(500).send("Error sending message to Slack");
-    }
-  } else {
-    res.status(200).send("OK");
+    axios
+      .post(SLACK_WEBHOOK_URL, message, {
+        headers: {
+          Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        },
+      })
+      .then(() => {
+        console.log("Slack notification sent successfully");
+        res.status(200).send("OK");
+      })
+      .catch((error) => {
+        console.error("Error sending Slack notification:", error);
+        res.status(500).send("Error");
+      });
   }
 });
 
-// Slack 액션 핸들러
-app.action("deploy_status", async ({ action, ack, say, body, logger }) => {
-  await ack();
-  logger.info("Button clicked", {
-    user: body.user.id,
-    action: action.action_id,
-    value: action.value,
-  });
+exports.slackEvents = functions.https.onRequest((req, res) => {
+  if (!verifySlackSignature(req)) {
+    console.error("Signature mismatch");
+    return res.status(401).send("Unauthorized");
+  }
 
-  const newText = action.value === "pending" ? "✅ 배포 완료" : "🚀 배포 예정";
-  const newState = action.value === "pending" ? "completed" : "pending";
+  const payload = JSON.parse(req.body.payload);
+  const action = payload.actions[0];
+  const userId = payload.user.id;
+  const response_url = payload.response_url;
 
-  try {
-    await web.chat.update({
-      channel: body.channel.id,
-      ts: body.message.ts,
-      blocks: body.message.blocks.map((block) => {
-        if (block.type === "actions") {
-          block.elements = block.elements.map((element) => {
-            if (element.action_id === action.action_id) {
+  const updateMessageBlocks = (originalBlocks) => {
+    return originalBlocks.map((block) => {
+      if (block.type === "actions") {
+        return {
+          ...block,
+          elements: block.elements.map((element) => {
+            if (element.action_id === "deploy_status") {
               return {
                 ...element,
+                type: "button",
+                action_id: "deploy_status",
                 text: {
-                  ...element.text,
-                  text: newText,
+                  type: "plain_text",
+                  text:
+                    element.value === "pending"
+                      ? "✅ 배포완료"
+                      : "🚀 배포 예정",
+                  emoji: true,
                 },
-                value: newState,
+                value: element.value === "pending" ? "completed" : "pending",
               };
             }
             return element;
-          });
-        }
-        return block;
-      }),
+          }),
+        };
+      }
+      return block;
     });
-  } catch (error) {
-    console.error("Error updating message:", error);
-  }
-});
+  };
 
-// Slack 이벤트 핸들러
-exports.slackEvents = functions.https.onRequest((req, res) => {
-  console.log("Received Slack event");
-  receiver.app(req, res);
+  const updatedBlocks = updateMessageBlocks(payload.message.blocks);
+
+  // Immediate response to Slack to avoid 3-second timeout
+  res.status(200).send("Processing");
+
+  // Update the message
+  axios
+    .post(
+      response_url,
+      {
+        channel: payload.channel.id,
+        ts: payload.message.ts,
+        blocks: updatedBlocks,
+        text: payload.message.text, // 기존 텍스트를 유지하기 위해 추가
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    )
+    .then(() => {
+      console.log("Message updated to 배포완료");
+    })
+    .catch((error) => {
+      console.error("Error updating message:", error);
+    });
 });
