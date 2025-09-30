@@ -7,19 +7,19 @@ const crypto = require("crypto");
 dotenv.config();
 
 // GitHub
-const GITHUB_SECRET = functions.config().github.github_secret;
+const GITHUB_SECRET = process.env.GITHUB_SECRET;
 const TARGET_BRANCH = "prod";
 
 //Slack
-const SLACK_WEBHOOK_URL = functions.config().slack.webhook_url;
-const SLACK_SIGNING_SECRET = functions.config().slack.signing_secret;
-const SLACK_BOT_TOKEN = functions.config().slack.bot_token;
+const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
+const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
 const githubToSlackMap = {
-  JH8459: "<@U04V9CHPE2F>",
   aksel26: "<@U04UV0MHDFZ>",
   thsuekfk2: "<@U050K7691L0>",
   snghyun331: "<@U06MGS5DF62>",
+  shjeon97: "<@U094J13K22D>",
 };
 
 function verifySlackSignature(req) {
@@ -47,7 +47,7 @@ exports.githubWebhook = functions.https.onRequest(async (req, res) => {
   const payload = req.body;
   const pr = payload.pull_request;
 
-  if (pr && payload.action === "closed" && pr.requested_reviewers.length >= 0 && pr.base.ref === TARGET_BRANCH) {
+  if (pr && payload.action === "closed" && pr.requested_reviewers.length >= 0 && (pr.base.ref === TARGET_BRANCH || pr.base.ref === "new-prod")) {
     const { html_url: prUrl, body: prBody, user: prUser, title: prTitle } = payload.pull_request;
 
     const repoName = payload.pull_request.head.repo.name;
